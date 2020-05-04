@@ -203,6 +203,9 @@ static int __net_init ipv6_sysctl_net_init(struct net *net)
 	struct ctl_table *ipv6_table;
 	struct ctl_table *ipv6_route_table;
 	struct ctl_table *ipv6_icmp_table;
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	struct ctl_table *ipv6_seg6_local_table;
+#endif
 	int err;
 
 	err = -ENOMEM;
@@ -235,9 +238,15 @@ static int __net_init ipv6_sysctl_net_init(struct net *net)
 	if (!ipv6_icmp_table)
 		goto out_ipv6_route_table;
 
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	ipv6_seg6_local_table = ipv6_seg6_local_sysctl_init(net);
+	if (!ipv6_seg6_local_table)
+		goto out_ipv6_icmp_table;
+#endif
+
 	net->ipv6.sysctl.hdr = register_net_sysctl(net, "net/ipv6", ipv6_table);
 	if (!net->ipv6.sysctl.hdr)
-		goto out_ipv6_icmp_table;
+		goto out_ipv6_seg6_table;
 
 	net->ipv6.sysctl.route_hdr =
 		register_net_sysctl(net, "net/ipv6/route", ipv6_route_table);
@@ -249,13 +258,30 @@ static int __net_init ipv6_sysctl_net_init(struct net *net)
 	if (!net->ipv6.sysctl.icmp_hdr)
 		goto out_unregister_route_table;
 
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	net->ipv6.sysctl.seg6_local_hdr =
+		register_net_sysctl(net, "net/ipv6/seg6_local",
+				    ipv6_seg6_local_table);
+	if (!net->ipv6.sysctl.seg6_local_hdr)
+		goto out_unregister_icmp_table;
+#endif
+
 	err = 0;
 out:
 	return err;
+
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+out_unregister_icmp_table:
+	unregister_net_sysctl_table(net->ipv6.sysctl.icmp_hdr);
+#endif
 out_unregister_route_table:
 	unregister_net_sysctl_table(net->ipv6.sysctl.route_hdr);
 out_unregister_ipv6_table:
 	unregister_net_sysctl_table(net->ipv6.sysctl.hdr);
+out_ipv6_seg6_table:
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	kfree(ipv6_seg6_local_table);
+#endif
 out_ipv6_icmp_table:
 	kfree(ipv6_icmp_table);
 out_ipv6_route_table:
@@ -270,11 +296,20 @@ static void __net_exit ipv6_sysctl_net_exit(struct net *net)
 	struct ctl_table *ipv6_table;
 	struct ctl_table *ipv6_route_table;
 	struct ctl_table *ipv6_icmp_table;
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	struct ctl_table *ipv6_seg6_local_table;
+#endif
 
 	ipv6_table = net->ipv6.sysctl.hdr->ctl_table_arg;
 	ipv6_route_table = net->ipv6.sysctl.route_hdr->ctl_table_arg;
 	ipv6_icmp_table = net->ipv6.sysctl.icmp_hdr->ctl_table_arg;
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	ipv6_seg6_local_table = net->ipv6.sysctl.seg6_local_hdr->ctl_table_arg;
+#endif
 
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	unregister_net_sysctl_table(net->ipv6.sysctl.seg6_local_hdr);
+#endif
 	unregister_net_sysctl_table(net->ipv6.sysctl.icmp_hdr);
 	unregister_net_sysctl_table(net->ipv6.sysctl.route_hdr);
 	unregister_net_sysctl_table(net->ipv6.sysctl.hdr);
@@ -282,6 +317,9 @@ static void __net_exit ipv6_sysctl_net_exit(struct net *net)
 	kfree(ipv6_table);
 	kfree(ipv6_route_table);
 	kfree(ipv6_icmp_table);
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	kfree(ipv6_seg6_local_table);
+#endif
 }
 
 static struct pernet_operations ipv6_sysctl_net_ops = {

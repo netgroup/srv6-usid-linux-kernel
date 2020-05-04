@@ -1157,6 +1157,9 @@ static inline int snmp6_unregister_dev(struct inet6_dev *idev) { return 0; }
 #endif
 
 #ifdef CONFIG_SYSCTL
+#ifdef CONFIG_IPV6_SEG6_LWTUNNEL
+struct ctl_table *ipv6_seg6_local_sysctl_init(struct net *net);
+#endif
 struct ctl_table *ipv6_icmp_sysctl_init(struct net *net);
 struct ctl_table *ipv6_route_sysctl_init(struct net *net);
 int ipv6_sysctl_register(void);

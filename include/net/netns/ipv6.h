@@ -19,6 +19,9 @@ struct netns_sysctl_ipv6 {
 	struct ctl_table_header *icmp_hdr;
 	struct ctl_table_header *frags_hdr;
 	struct ctl_table_header *xfrm6_hdr;
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	struct ctl_table_header *seg6_local_hdr;
+#endif
 #endif
 	int bindv6only;
 	int flush_delay;
@@ -51,6 +54,10 @@ struct netns_sysctl_ipv6 {
 	int max_hbh_opts_len;
 	int seg6_flowlabel;
 	bool skip_notify_on_dev_down;
+#ifdef	CONFIG_IPV6_SEG6_LWTUNNEL
+	int seg6_usid_block_len;
+	int seg6_usid_len;
+#endif
 };
 
 struct netns_ipv6 {

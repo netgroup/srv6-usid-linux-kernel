@@ -27,6 +27,9 @@
 #ifdef CONFIG_IPV6_SEG6_HMAC
 #include <net/seg6_hmac.h>
 #endif
+#ifdef CONFIG_SYSCTL
+#include <linux/sysctl.h>
+#endif
 #include <net/seg6_local.h>
 #include <linux/etherdevice.h>
 #include <linux/bpf.h>
@@ -96,9 +99,19 @@ struct seg6_local_lwt {
 	int headroom;
 	struct seg6_action_desc *desc;
 
+	/* reference to the current network namespace */
+	struct net *net;
+
 	/* parsed optional attributes */
 	unsigned long parsed_optional_attrs;
 };
+
+static inline struct net *fib6_config_get_net(struct fib6_config *fib6_cfg)
+{
+	struct nl_info *nli = &fib6_cfg->fc_nlinfo;
+
+	return nli->nl_net;
+}
 
 static struct seg6_local_lwt *seg6_local_lwtunnel(struct lwtunnel_state *lwt)
 {
@@ -285,6 +298,10 @@ static void usid_layout_set(struct usid_layout *lyt,
 
 static int input_action_un_build(struct seg6_local_lwt *slwt, const void *cfg)
 {
+#ifdef CONFIG_SYSCTL
+	struct net *net = slwt->net;
+#endif
+
 	if (slwt->parsed_optional_attrs & (1 << SEG6_LOCAL_USEG))
 		/* SEG6_LOCAL_USEG attr is supplied by the userspace and, at
 		 * this point, it has already been parsed and verified.
@@ -294,8 +311,14 @@ static int input_action_un_build(struct seg6_local_lwt *slwt, const void *cfg)
 	/* we need to set uSID Block and uSID lengths to default values */
 	slwt->parsed_optional_attrs |= (1 << SEG6_LOCAL_USEG);
 
+#ifdef CONFIG_SYSCTL
+	/* NOTE: these parameters are considered to be valid at this point */
+	usid_layout_set(&slwt->usid_lyt, net->ipv6.sysctl.seg6_usid_block_len,
+			net->ipv6.sysctl.seg6_usid_len);
+#else
 	usid_layout_set(&slwt->usid_lyt, USID_BLOCK_LEN_DEFAULT,
 			USID_LEN_DEFAULT);
+#endif
 
 	return 0;
 }
@@ -1070,6 +1093,9 @@ static int usid_check_params(__u8 ubl, __u8 ul)
 static int parse_nla_usid_layout(struct nlattr **attrs,
 				 struct seg6_local_lwt *slwt)
 {
+#ifdef CONFIG_SYSCTL
+	struct net *net = slwt->net;
+#endif
 	struct usid_layout *lyt;
 	__u8 ubl, ul;
 	int res;
@@ -1085,8 +1111,13 @@ static int parse_nla_usid_layout(struct nlattr **attrs,
 		/* at least one of the two supplied values must be set */
 		return -EINVAL;
 
+#ifdef CONFIG_SYSCTL
+	ubl = ubl ?: net->ipv6.sysctl.seg6_usid_block_len;
+	ul = ul ?: net->ipv6.sysctl.seg6_usid_len;
+#else
 	ubl = ubl ?: USID_BLOCK_LEN_DEFAULT;
 	ul = ul ?: USID_LEN_DEFAULT;
+#endif
 
 	res = usid_check_params(ubl, ul);
 	if (res < 0)
@@ -1420,6 +1451,13 @@ static int seg6_local_build_state(struct nlattr *nla, unsigned int family,
 	slwt = seg6_local_lwtunnel(newts);
 	slwt->action = nla_get_u32(tb[SEG6_LOCAL_ACTION]);
 
+	slwt->net = fib6_config_get_net((struct fib6_config *)cfg);
+	if (!slwt->net) {
+		/* it should NOT happen */
+		err = -ENOENT;
+		goto out_free;
+	}
+
 	/* call the before_parse_attrs callback, if any */
 	err = seg6_local_lwtunnel_before_parse_attrs(slwt, tb, cfg);
 	if (err < 0)
@@ -1588,3 +1626,112 @@ void seg6_local_exit(void)
 {
 	lwtunnel_encap_del_ops(&seg6_local_ops, LWTUNNEL_ENCAP_SEG6_LOCAL);
 }
+
+#ifdef CONFIG_SYSCTL
+
+enum {
+	PROC_SEG6_UNSPEC_KEY	 = 0,
+	PROC_SEG6_USID_BLEN_KEY	 = 1,
+	PROC_SEG6_USID_LEN_KEY	 = 2,
+};
+
+static const int proc_seg6_usid_param[] = {
+	[PROC_SEG6_UNSPEC_KEY]	  = PROC_SEG6_UNSPEC_KEY,
+	[PROC_SEG6_USID_BLEN_KEY] = PROC_SEG6_USID_BLEN_KEY,
+	[PROC_SEG6_USID_LEN_KEY]  = PROC_SEG6_USID_LEN_KEY,
+};
+
+/* the handler checks and returns the value of the usid_block_len and the
+ * usid_len. The field @ctl->extra1 is used to select which value between the
+ * two has to be checked.
+ */
+static int proc_seg6_usid_x_handler(struct ctl_table *ctl, int write,
+				    void __user *buffer, size_t *lenp,
+				    loff_t *ppos)
+{
+	__u8 sysclt_val = 0;
+	__u8 user_val = 0;
+	int res = -EINVAL;
+	struct net *net;
+	int param;
+
+	if (!write)
+		goto skip_checks;
+
+	net = (struct net *)ctl->extra2;
+	param = *((int *)ctl->extra1);
+
+	res = kstrtou8_from_user(buffer, *lenp, 10, &user_val);
+	if (res)
+		return res;
+
+	switch (param) {
+	case PROC_SEG6_USID_LEN_KEY:
+		sysclt_val = net->ipv6.sysctl.seg6_usid_block_len;
+		res = usid_check_params(sysclt_val, user_val);
+		break;
+
+	case PROC_SEG6_USID_BLEN_KEY:
+		sysclt_val = net->ipv6.sysctl.seg6_usid_len;
+		res = usid_check_params(user_val, sysclt_val);
+		break;
+
+	default:
+		res = -EINVAL;
+		break;
+	}
+
+	if (res < 0)
+		return res;
+
+skip_checks:
+	return proc_douintvec(ctl, write, buffer, lenp, ppos);
+}
+
+static struct ctl_table ipv6_seg6_local_table_template[] = {
+	{
+		.procname	= "usid_block_len",
+		.data		= &init_net.ipv6.sysctl.seg6_usid_block_len,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_seg6_usid_x_handler,
+		.extra1		= (void *)&proc_seg6_usid_param
+					   [PROC_SEG6_USID_BLEN_KEY],
+		.extra2		= (void *)&init_net,
+	},
+	{
+		.procname	= "usid_len",
+		.data		= &init_net.ipv6.sysctl.seg6_usid_len,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler   = proc_seg6_usid_x_handler,
+		.extra1		= (void *)&proc_seg6_usid_param
+					   [PROC_SEG6_USID_LEN_KEY],
+		.extra2		= (void *)&init_net,
+	},
+	{ },
+};
+
+struct ctl_table * __net_init ipv6_seg6_local_sysctl_init(struct net *net)
+{
+	struct ctl_table *table;
+
+	table = kmemdup(ipv6_seg6_local_table_template,
+			sizeof(ipv6_seg6_local_table_template),
+			GFP_KERNEL);
+
+	net->ipv6.sysctl.seg6_usid_block_len = USID_BLOCK_LEN_DEFAULT;
+	net->ipv6.sysctl.seg6_usid_len = USID_LEN_DEFAULT;
+
+	if (table) {
+		table[0].data = &net->ipv6.sysctl.seg6_usid_block_len;
+		table[0].extra2 = (void *)net;
+
+		table[1].data = &net->ipv6.sysctl.seg6_usid_len;
+		table[1].extra2 = (void *)net;
+	}
+
+	return table;
+}
+
+#endif
