@@ -26,6 +26,7 @@ enum {
 	SEG6_LOCAL_IIF,
 	SEG6_LOCAL_OIF,
 	SEG6_LOCAL_BPF,
+	SEG6_LOCAL_USEG,
 	__SEG6_LOCAL_MAX,
 };
 #define SEG6_LOCAL_MAX (__SEG6_LOCAL_MAX - 1)
@@ -62,6 +63,8 @@ enum {
 	SEG6_LOCAL_ACTION_END_AM	= 14,
 	/* custom BPF action */
 	SEG6_LOCAL_ACTION_END_BPF	= 15,
+	/* uN node segment */
+	SEG6_LOCAL_ACTION_UN		= 16,
 
 	__SEG6_LOCAL_ACTION_MAX,
 };
@@ -76,5 +79,11 @@ enum {
 };
 
 #define SEG6_LOCAL_BPF_PROG_MAX (__SEG6_LOCAL_BPF_PROG_MAX - 1)
+
+/* Layout of uSID carrier with uSID Block and uSID lengths */
+struct usid_layout {
+	__u8 usid_block_len;
+	__u8 usid_len;
+};
 
 #endif

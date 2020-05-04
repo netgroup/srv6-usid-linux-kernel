@@ -31,6 +31,13 @@
 #include <linux/etherdevice.h>
 #include <linux/bpf.h>
 
+/* default length values for uSID Block and uSID.
+ * NOTE: those values are expressed in bits. Please note that those values must
+ * be > 0 and they must be divisible by 8.
+ */
+#define USID_BLOCK_LEN_DEFAULT	32
+#define USID_LEN_DEFAULT	16
+
 struct seg6_local_lwt;
 
 /* callbacks used for customizing the creation and destruction of a behavior */
@@ -78,6 +85,8 @@ struct seg6_local_lwt {
 	int iif;
 	int oif;
 	struct bpf_lwt_prog bpf;
+	/* used to encode uSID Block and uSID lengths for micro segment */
+	struct usid_layout usid_lyt;
 
 	/* generic data pointer that can be used for accessing custom data
 	 * structures used by the seg6_local_lwtunnel_ops callbacks.
@@ -265,6 +274,84 @@ static int input_action_end(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 drop:
 	kfree_skb(skb);
 	return -EINVAL;
+}
+
+static void usid_layout_set(struct usid_layout *lyt,
+			    __u8 ubl, __u8 ul)
+{
+	lyt->usid_block_len = ubl;
+	lyt->usid_len = ul;
+}
+
+static int input_action_un_build(struct seg6_local_lwt *slwt, const void *cfg)
+{
+	if (slwt->parsed_optional_attrs & (1 << SEG6_LOCAL_USEG))
+		/* SEG6_LOCAL_USEG attr is supplied by the userspace and, at
+		 * this point, it has already been parsed and verified.
+		 */
+		return 0;
+
+	/* we need to set uSID Block and uSID lengths to default values */
+	slwt->parsed_optional_attrs |= (1 << SEG6_LOCAL_USEG);
+
+	usid_layout_set(&slwt->usid_lyt, USID_BLOCK_LEN_DEFAULT,
+			USID_LEN_DEFAULT);
+
+	return 0;
+}
+
+static bool is_next_usid_zero(const struct in6_addr *const sid,
+			      const struct usid_layout *const lyt)
+{
+	const __u8 ubl = lyt->usid_block_len >> 3;
+	const __u8 ul = lyt->usid_len >> 3;
+	int i;
+
+	for (i = 0; i < ul; ++i) {
+		if (sid->s6_addr[ubl + ul + i] != 0x00)
+			return false;
+	}
+
+	return true;
+}
+
+static void advance_next_usid(struct in6_addr *addr,
+			      const struct usid_layout *const lyt)
+{
+	const __u8 ubl = lyt->usid_block_len >> 3;
+	const __u8 ul = lyt->usid_len >> 3;
+
+	/* move to the next usid  */
+	memmove((void *)&addr->s6_addr[ubl],
+		(const void *)&addr->s6_addr[ubl + ul],
+		16 - (ubl + ul));
+
+	/* end of carrier MUST be equal to uSID length */
+	memset((void *)&addr->s6_addr[16 - ul], 0x00, ul);
+}
+
+/* uN micro segment function */
+static int input_action_un(struct sk_buff *skb, struct seg6_local_lwt *slwt)
+{
+	struct usid_layout *lyt = &slwt->usid_lyt;
+	struct in6_addr *da;
+
+	/* the pskb_may_pull() is not strictly necessary here because the ipv6
+	 * header has already been parsed in the previous routing phase
+	 * (/net/ipv6/ip6_input.c, line 160). Hence, the portion of the packet
+	 * that contains the ipv6 header is already available (and linear).
+	 */
+	da = &ipv6_hdr(skb)->daddr;
+
+	if (!is_next_usid_zero(da, lyt)) {
+		advance_next_usid(da, lyt);
+
+		seg6_lookup_nexthop(skb, NULL, 0);
+
+		return dst_input(skb);
+	} else {
+		return input_action_end(skb, slwt);
+	}
 }
 
 /* regular endpoint, and forward to specified nexthop */
@@ -642,6 +729,13 @@ static struct seg6_action_desc seg6_action_table[] = {
 		.required_attrs	= (1 << SEG6_LOCAL_BPF),
 		.input		= input_action_end_bpf,
 	},
+	{
+		.action		= SEG6_LOCAL_ACTION_UN,
+		.required_attrs	= 0,
+		.optional_attrs = (1 << SEG6_LOCAL_USEG),
+		.input		= input_action_un,
+		.slwt_ops	= { .build_state = input_action_un_build, }
+	},
 
 };
 
@@ -688,6 +782,8 @@ static const struct nla_policy seg6_local_policy[SEG6_LOCAL_MAX + 1] = {
 	[SEG6_LOCAL_IIF]	= { .type = NLA_U32 },
 	[SEG6_LOCAL_OIF]	= { .type = NLA_U32 },
 	[SEG6_LOCAL_BPF]	= { .type = NLA_NESTED },
+	[SEG6_LOCAL_USEG]	= { .type = NLA_BINARY,
+				    .len = sizeof(struct usid_layout) },
 };
 
 static int parse_nla_srh(struct nlattr **attrs, struct seg6_local_lwt *slwt)
@@ -952,6 +1048,90 @@ static void destroy_attr_bpf(struct seg6_local_lwt *slwt)
 	slwt->bpf.prog = NULL;
 }
 
+static int usid_check_params(__u8 ubl, __u8 ul)
+{
+	/* uSID length must be greater than zero and divisible by 8. Moreover,
+	 * uSID length must ensure that we have enough space for the uSID Block
+	 * as well as for the end of carrier.
+	 */
+	if (!(ul >= 8 && (2 * ul) <= (128 - ubl) && !(ul & 0x7)))
+		return -EINVAL;
+
+	/* uSID Block length must be greater than zero and dibisible by 8.
+	 * uSID Block length must ensure that we have enough space for the uSID
+	 * Block and for the end of carrier, at least.
+	 */
+	if (!(ubl >= 8 && ubl <= (128 - 2 * ul) && !(ubl & 0x7)))
+		return -EINVAL;
+
+	return 0;
+}
+
+static int parse_nla_usid_layout(struct nlattr **attrs,
+				 struct seg6_local_lwt *slwt)
+{
+	struct usid_layout *lyt;
+	__u8 ubl, ul;
+	int res;
+
+	/* we get the usid_layout supplied by the userspace */
+	lyt = nla_data(attrs[SEG6_LOCAL_USEG]);
+	if (!lyt)
+		return -EINVAL;
+
+	ubl = lyt->usid_block_len;
+	ul =  lyt->usid_len;
+	if (!(ubl | ul))
+		/* at least one of the two supplied values must be set */
+		return -EINVAL;
+
+	ubl = ubl ?: USID_BLOCK_LEN_DEFAULT;
+	ul = ul ?: USID_LEN_DEFAULT;
+
+	res = usid_check_params(ubl, ul);
+	if (res < 0)
+		return res;
+
+	usid_layout_set(&slwt->usid_lyt, ubl, ul);
+
+	return 0;
+}
+
+static int put_nla_usid_layout(struct sk_buff *skb,
+			       struct seg6_local_lwt *slwt)
+{
+	struct usid_layout *lyt;
+	struct nlattr *nla;
+	int len;
+
+	lyt = &slwt->usid_lyt;
+	len = sizeof(*lyt);
+
+	nla = nla_reserve(skb, SEG6_LOCAL_USEG, len);
+	if (!nla)
+		return -EMSGSIZE;
+
+	memcpy(nla_data(nla), lyt, len);
+
+	return 0;
+}
+
+static int cmp_nla_usid_layout(struct seg6_local_lwt *a,
+			       struct seg6_local_lwt *b)
+{
+	struct usid_layout *lyt_a, *lyt_b;
+
+	lyt_a = &a->usid_lyt;
+	lyt_b = &b->usid_lyt;
+
+	if (lyt_a->usid_block_len != lyt_b->usid_block_len)
+		return 1;
+	if (lyt_a->usid_len != lyt_b->usid_len)
+		return 1;
+
+	return 0;
+}
+
 struct seg6_action_param {
 	int (*parse)(struct nlattr **attrs, struct seg6_local_lwt *slwt);
 	int (*put)(struct sk_buff *skb, struct seg6_local_lwt *slwt);
@@ -994,6 +1174,10 @@ static struct seg6_action_param seg6_action_params[SEG6_LOCAL_MAX + 1] = {
 				    .put = put_nla_bpf,
 				    .cmp = cmp_nla_bpf,
 				    .destroy = destroy_attr_bpf	},
+
+	[SEG6_LOCAL_USEG]	= { .parse = parse_nla_usid_layout,
+				    .put = put_nla_usid_layout,
+				    .cmp = cmp_nla_usid_layout },
 
 };
 
@@ -1346,6 +1530,9 @@ static int seg6_local_get_encap_size(struct lwtunnel_state *lwt)
 		nlsize += nla_total_size(sizeof(struct nlattr)) +
 		       nla_total_size(MAX_PROG_NAME) +
 		       nla_total_size(4);
+
+	if (attrs & (1 << SEG6_LOCAL_USEG))
+		nlsize += nla_total_size(sizeof(struct usid_layout));
 
 	return nlsize;
 }
