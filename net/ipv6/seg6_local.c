@@ -33,6 +33,14 @@
 
 struct seg6_local_lwt;
 
+/* callbacks used for customizing the creation and destruction of a behavior */
+struct seg6_local_lwtunnel_ops {
+	int (*before_parse_attrs)(struct seg6_local_lwt *slwt,
+				  struct nlattr **attrs, const void *cfg);
+	int (*build_state)(struct seg6_local_lwt *slwt, const void *cfg);
+	int (*destroy_state)(struct seg6_local_lwt *slwt);
+};
+
 struct seg6_action_desc {
 	int action;
 	unsigned long required_attrs;
@@ -52,6 +60,8 @@ struct seg6_action_desc {
 
 	int (*input)(struct sk_buff *skb, struct seg6_local_lwt *slwt);
 	int static_headroom;
+
+	struct seg6_local_lwtunnel_ops slwt_ops;
 };
 
 struct bpf_lwt_prog {
@@ -68,6 +78,11 @@ struct seg6_local_lwt {
 	int iif;
 	int oif;
 	struct bpf_lwt_prog bpf;
+
+	/* generic data pointer that can be used for accessing custom data
+	 * structures used by the seg6_local_lwtunnel_ops callbacks.
+	 */
+	void *private_data;
 
 	int headroom;
 	struct seg6_action_desc *desc;
@@ -1119,6 +1134,80 @@ parse_err:
 	return err;
 }
 
+/* used for setting variables or passing config parameters to the behavior
+ * during its initialization phase but before parsing any attribute (before
+ * calling the parse_nla_action())
+ */
+static int
+seg6_local_lwtunnel_before_parse_attrs(struct seg6_local_lwt *slwt,
+				       struct nlattr **attrs, const void *cfg)
+{
+	int (*lwt_before_parse_attrs)(struct seg6_local_lwt *slwt,
+				      struct nlattr **attrs,
+				      const void *cfg);
+	struct seg6_action_desc *desc;
+	int err = 0;
+
+	/* NOTE: attributes have not been parsed yet */
+	desc = __get_action_desc(slwt->action);
+	if (!desc)
+		return -EINVAL;
+
+	if (!desc->input)
+		return -EOPNOTSUPP;
+
+	lwt_before_parse_attrs = desc->slwt_ops.before_parse_attrs;
+	if (lwt_before_parse_attrs)
+		err = lwt_before_parse_attrs(slwt, attrs, cfg);
+
+	return err;
+}
+
+/* used for calling the custom constructor of the behavior during its
+ * initialization phase and after that all its attributes have been
+ * successfully parsed (after that parse_nla_action() returned without
+ * errors).
+ */
+static int seg6_local_lwtunnel_build_state(struct seg6_local_lwt *slwt,
+					   const void *cfg)
+{
+	int (*lwt_build_state_func)(struct seg6_local_lwt *slwt,
+				    const void *cfg);
+	struct seg6_action_desc *desc;
+	int err = 0;
+
+	desc = slwt->desc;
+	if (!desc)
+		return -EINVAL;
+
+	lwt_build_state_func = desc->slwt_ops.build_state;
+	if (lwt_build_state_func)
+		err = lwt_build_state_func(slwt, cfg);
+
+	return err;
+}
+
+/* used for calling the custom destructor of the behavior which is invoked
+ * before calling the destroy_attrs() (before relasing any resources that may
+ * have been taken during the parsing of each attribute of the behavior).
+ */
+static int seg6_local_lwtunnel_destroy_state(struct seg6_local_lwt *slwt)
+{
+	int (*lwt_destroy_state_func)(struct seg6_local_lwt *slwt);
+	struct seg6_action_desc *desc;
+	int err = 0;
+
+	desc = slwt->desc;
+	if (!desc)
+		return -EINVAL;
+
+	lwt_destroy_state_func = desc->slwt_ops.destroy_state;
+	if (lwt_destroy_state_func)
+		err = lwt_destroy_state_func(slwt);
+
+	return err;
+}
+
 static int seg6_local_build_state(struct nlattr *nla, unsigned int family,
 				  const void *cfg, struct lwtunnel_state **ts,
 				  struct netlink_ext_ack *extack)
@@ -1147,9 +1236,19 @@ static int seg6_local_build_state(struct nlattr *nla, unsigned int family,
 	slwt = seg6_local_lwtunnel(newts);
 	slwt->action = nla_get_u32(tb[SEG6_LOCAL_ACTION]);
 
+	/* call the before_parse_attrs callback, if any */
+	err = seg6_local_lwtunnel_before_parse_attrs(slwt, tb, cfg);
+	if (err < 0)
+		goto out_free;
+
 	err = parse_nla_action(tb, slwt);
 	if (err < 0)
 		goto out_free;
+
+	/* all attrs are ok; we call the custom behavior constructor, if any */
+	err = seg6_local_lwtunnel_build_state(slwt, cfg);
+	if (err < 0)
+		goto destroy_attrs;
 
 	newts->type = LWTUNNEL_ENCAP_SEG6_LOCAL;
 	newts->flags = LWTUNNEL_STATE_INPUT_REDIRECT;
@@ -1158,6 +1257,9 @@ static int seg6_local_build_state(struct nlattr *nla, unsigned int family,
 	*ts = newts;
 
 	return 0;
+
+destroy_attrs:
+	destroy_attrs(slwt);
 
 out_free:
 	/* parse_nla_action() is in charge of calling destroy_attrs() if,
@@ -1176,6 +1278,9 @@ out_free:
 static void seg6_local_destroy_state(struct lwtunnel_state *lwt)
 {
 	struct seg6_local_lwt *slwt = seg6_local_lwtunnel(lwt);
+
+	/* we call the custom behavior destructor, if any. */
+	seg6_local_lwtunnel_destroy_state(slwt);
 
 	destroy_attrs(slwt);
 }
