@@ -3,7 +3,7 @@
 The SRv6 "micro segment" (uSID for short) solution is an extension to the SRv6 Network
 Programming model ([see below](#reference-ietf-documents)). It allows expressing SRv6 segments with a very compact and 
 efficient representation, for example using two bytes for uSID instead of using 
-a normal IPv6 address (16 bytes) for a regular SRv6 segment.
+a normal IPv6 address (16 bytes) for a regular SRv6 segment...
 
 In the context of the [ROSE](https://netgroup.github.io/rose/) project, [we](#srv6-usid-linux-implementation-team) have 
 implemented the SRv6 uSID solution in Linux.
