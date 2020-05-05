@@ -6,7 +6,7 @@ efficient representation, for example using two bytes for uSID instead of using
 a normal IPv6 address (16 bytes) for a regular SRv6 segment.
 
 In the context of the [ROSE](https://netgroup.github.io/rose/) project, [we](#srv6-usid-linux-implementation-team) have 
-implemented the SRv6 uSID solution in Linux.
+implemented the SRv6 uSID solution in Linux..
 
 The processing of micro segments is performed by the Linux kernel, extending the current SRv6 implementation.
 The iproute2 userspace tool has been modified to support the configuration of the SRv6 uSIDs. The usage of
