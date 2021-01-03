@@ -3,7 +3,8 @@
 The SRv6 "micro segment" (uSID for short) solution is an extension to the SRv6 Network
 Programming model ([see below](#reference-ietf-documents)). It allows expressing SRv6 segments with a very compact and 
 efficient representation, for example using two bytes for uSID instead of using 
-a normal IPv6 address (16 bytes) for a regular SRv6 segment.
+a normal IPv6 address (16 bytes) for a regular SRv6 segment. Our scientific papers on this topic
+are listed [below](#scientific-papers).
 
 In the context of the [ROSE](https://netgroup.github.io/rose/) project, [we](#srv6-usid-linux-implementation-team) have 
 implemented the SRv6 uSID solution in Linux.
@@ -25,6 +26,12 @@ the new iproute2 CLI commands is explained [here](iproute2-uSID-README.md).
 "SRv6 Network Programming" [Internet Draft](https://tools.ietf.org/html/draft-ietf-spring-srv6-network-programming) 
               
 "IPv6 Segment Routing Header (SRH)" [RFC 8754](https://www.rfc-editor.org/rfc/rfc8754.html)
+
+### Scientific papers
+
+- A. Tulumello, A. Mayer, M. Bonola, P. Lungaroni, C. Scarpitta, S. Salsano, A. Abdelsalam, P. Camarillo, D. Dukes, F. Clad, C. Filsfils, <br>
+"[Micro SIDs: a solution for Efficient Representation of Segment IDs in SRv6 Networks](https://doi.org/10.23919/CNSM50824.2020.9269075)", <br> 
+16th International Conference on Network and Service Management, CNSM 2020 (Acceptance ratio ~19%), 2-6 November 2020, Virtual Conference ([pdf](http://dl.ifip.org/db/conf/cnsm/cnsm2020/1570663490.pdf)). 
 
 ### SRv6 uSID Linux implementation Team
 
