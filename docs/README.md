@@ -30,6 +30,10 @@ the new iproute2 CLI commands is explained [here](iproute2-uSID-README.md).
 ### Scientific papers
 
 - A. Tulumello, A. Mayer, M. Bonola, P. Lungaroni, C. Scarpitta, S. Salsano, A. Abdelsalam, P. Camarillo, D. Dukes, F. Clad, C. Filsfils, <br>
+"[Micro SIDs: a solution for Efficient Representation of Segment IDs in SRv6 Networks](https://doi.org/10.1109/TNSM.2022.3205265)", <br>
+IEEE Transaction on Network and Service Management, 2022, ([pdf-preprint](http://netgroup.uniroma2.it/Stefano_Salsano/papers/22_tnsm_srv6_micro_sids.pdf))
+
+- A. Tulumello, A. Mayer, M. Bonola, P. Lungaroni, C. Scarpitta, S. Salsano, A. Abdelsalam, P. Camarillo, D. Dukes, F. Clad, C. Filsfils, <br>
 "[Micro SIDs: a solution for Efficient Representation of Segment IDs in SRv6 Networks](https://doi.org/10.23919/CNSM50824.2020.9269075)", <br> 
 16th International Conference on Network and Service Management, CNSM 2020 (Acceptance ratio ~19%), 2-6 November 2020, Virtual Conference ([pdf](http://dl.ifip.org/db/conf/cnsm/cnsm2020/1570663490.pdf)). 
 
